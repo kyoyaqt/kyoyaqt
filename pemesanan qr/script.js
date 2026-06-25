@@ -2,6 +2,11 @@ const STORAGE_KEY = "menuRestoran";
 const KERANJANG_KEY = "keranjangRestoran";
 const PESANAN_KEY = "pesananRestoran";
 
+const MENU_COLLECTION = "menus";
+const ORDERS_COLLECTION = "orders";
+const SETTINGS_COLLECTION = "settings";
+const DEFAULT_SETTINGS_DOC = "global";
+
 const gambarMenuTersedia = [
     "minus.png",
     "plus.png",
@@ -23,11 +28,19 @@ const menuDefault = [
     },
 ];
 
+let menuCache = [];
+let pesananCache = [];
+let firebaseReadyPromise = null;
+
 function formatRupiah(angka) {
     return angka.toLocaleString("id-ID");
 }
 
-function getMenu() {
+function isFirebaseReady() {
+    return Boolean(window.firebaseDb);
+}
+
+function getMenuFallback() {
     const data = localStorage.getItem(STORAGE_KEY);
     if (!data) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(menuDefault));
@@ -42,6 +55,10 @@ function getMenu() {
     }
 }
 
+function saveMenuFallback(menu) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(menu));
+}
+
 function getStatusLabel(status) {
     const labels = {
         pending: "Pending",
@@ -51,10 +68,6 @@ function getStatusLabel(status) {
     };
 
     return labels[status] || "Pending";
-}
-
-function saveMenu(menu) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(menu));
 }
 
 function getPathGambar(namaFile) {
@@ -137,11 +150,112 @@ function slugify(text) {
         .replace(/^-+|-+$/g, "");
 }
 
-function renderMenuIndex() {
+function getKeranjang() {
+    return JSON.parse(localStorage.getItem(KERANJANG_KEY) || "{}");
+}
+
+function saveKeranjang(keranjang) {
+    localStorage.setItem(KERANJANG_KEY, JSON.stringify(keranjang));
+}
+
+function getPesananFallback() {
+    return JSON.parse(localStorage.getItem(PESANAN_KEY) || "[]");
+}
+
+function savePesananFallback(pesanan) {
+    localStorage.setItem(PESANAN_KEY, JSON.stringify(pesanan));
+}
+
+async function initFirebaseData() {
+    if (firebaseReadyPromise) {
+        return firebaseReadyPromise;
+    }
+
+    firebaseReadyPromise = (async () => {
+        if (!isFirebaseReady()) {
+            menuCache = getMenuFallback();
+            pesananCache = getPesananFallback();
+            return;
+        }
+
+        const menuSnapshot = await firebaseDb.collection(MENU_COLLECTION).get();
+        if (menuSnapshot.empty) {
+            const batch = firebaseDb.batch();
+            menuDefault.forEach((item) => {
+                batch.set(firebaseDb.collection(MENU_COLLECTION).doc(item.id), item);
+            });
+            await batch.commit();
+            menuCache = [...menuDefault];
+        } else {
+            menuCache = menuSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        }
+
+        const orderSnapshot = await firebaseDb
+            .collection(ORDERS_COLLECTION)
+            .orderBy("createdAt", "desc")
+            .get();
+
+        pesananCache = orderSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    })();
+
+    return firebaseReadyPromise;
+}
+
+async function getMenu() {
+    await initFirebaseData();
+    return [...menuCache];
+}
+
+async function saveMenu(menu) {
+    menuCache = [...menu];
+
+    if (!isFirebaseReady()) {
+        saveMenuFallback(menu);
+        return;
+    }
+
+    const batch = firebaseDb.batch();
+    const snapshot = await firebaseDb.collection(MENU_COLLECTION).get();
+    snapshot.forEach((doc) => batch.delete(doc.ref));
+
+    menu.forEach((item) => {
+        const ref = firebaseDb.collection(MENU_COLLECTION).doc(item.id);
+        batch.set(ref, item);
+    });
+
+    await batch.commit();
+}
+
+async function getPesanan() {
+    await initFirebaseData();
+    return [...pesananCache];
+}
+
+async function savePesanan(pesanan) {
+    pesananCache = [...pesanan];
+
+    if (!isFirebaseReady()) {
+        savePesananFallback(pesanan);
+        return;
+    }
+
+    const batch = firebaseDb.batch();
+    const snapshot = await firebaseDb.collection(ORDERS_COLLECTION).get();
+    snapshot.forEach((doc) => batch.delete(doc.ref));
+
+    pesanan.forEach((item) => {
+        const ref = firebaseDb.collection(ORDERS_COLLECTION).doc(item.id);
+        batch.set(ref, item);
+    });
+
+    await batch.commit();
+}
+
+async function renderMenuIndex() {
     const container = document.getElementById("containerMenu");
     if (!container) return;
 
-    const menu = getMenu();
+    const menu = await getMenu();
     const keranjang = JSON.parse(localStorage.getItem(KERANJANG_KEY) || "{}");
 
     container.innerHTML = menu
@@ -171,11 +285,11 @@ function renderMenuIndex() {
     renderKeranjang();
 }
 
-function renderMenuAdmin() {
+async function renderMenuAdmin() {
     const container = document.getElementById("daftarMenuAdmin");
     if (!container) return;
 
-    const menu = getMenu();
+    const menu = await getMenu();
     container.innerHTML = menu
         .map(
             (item) => `
@@ -191,8 +305,8 @@ function renderMenuAdmin() {
         .join("");
 }
 
-function hapusMenu(id) {
-    const menu = getMenu();
+async function hapusMenu(id) {
+    const menu = await getMenu();
     const target = menu.find((item) => item.id === id);
     if (!target) return;
 
@@ -204,16 +318,17 @@ function hapusMenu(id) {
     const keranjang = getKeranjang();
     delete keranjang[id];
 
-    saveMenu(menuBaru);
+    await saveMenu(menuBaru);
     saveKeranjang(keranjang);
-    renderMenuAdmin();
+    await renderMenuAdmin();
+    await renderMenuIndex();
 }
 
 function initAdminForm() {
     const form = document.getElementById("formMenu");
     if (!form) return;
 
-    form.addEventListener("submit", (event) => {
+    form.addEventListener("submit", async (event) => {
         event.preventDefault();
 
         const nama = document.getElementById("nama").value.trim();
@@ -226,7 +341,7 @@ function initAdminForm() {
             return;
         }
 
-        const menu = getMenu();
+        const menu = await getMenu();
         const idDasar = slugify(nama) || `menu-${Date.now()}`;
         const idUnik = menu.some((item) => item.id === idDasar)
             ? `${idDasar}-${Date.now()}`
@@ -241,10 +356,11 @@ function initAdminForm() {
             gambarUrl,
         });
 
-        saveMenu(menu);
+        await saveMenu(menu);
         form.reset();
         updatePreviewGambar();
-        renderMenuAdmin();
+        await renderMenuAdmin();
+        await renderMenuIndex();
     });
 }
 
@@ -286,49 +402,13 @@ function updatePreviewGambar() {
     preview.style.display = "block";
 }
 
-function getKeranjang() {
-    return JSON.parse(localStorage.getItem(KERANJANG_KEY) || "{}");
-}
-
-function saveKeranjang(keranjang) {
-    localStorage.setItem(KERANJANG_KEY, JSON.stringify(keranjang));
-}
-
-function getPesanan() {
-    return JSON.parse(localStorage.getItem(PESANAN_KEY) || "[]");
-}
-
-function savePesanan(pesanan) {
-    localStorage.setItem(PESANAN_KEY, JSON.stringify(pesanan));
-}
-
-function ubahJumlah(id, perubahan) {
-    const menu = getMenu();
-    const item = menu.find((produk) => produk.id === id);
-    if (!item) return;
-
-    const keranjang = getKeranjang();
-    const qtySekarang = keranjang[id] || 0;
-    const qtyBaru = qtySekarang + perubahan;
-
-    if (qtyBaru < 0) return;
-
-    keranjang[id] = qtyBaru;
-    if (keranjang[id] === 0) {
-        delete keranjang[id];
-    }
-
-    saveKeranjang(keranjang);
-    renderKeranjang();
-}
-
-function renderKeranjang() {
+async function renderKeranjang() {
     const daftar = document.getElementById("daftarKeranjang");
     const totalEl = document.getElementById("total");
     const bayarBtn = document.getElementById("btnBayar");
     if (!daftar || !totalEl) return;
 
-    const menu = getMenu();
+    const menu = await getMenu();
     const keranjang = getKeranjang();
     let total = 0;
     let adaItem = false;
@@ -360,12 +440,32 @@ function renderKeranjang() {
         }
     });
 
-    renderStatusPelanggan();
+    await renderStatusPelanggan();
 }
 
-function bayarKeranjang() {
+async function ubahJumlah(id, perubahan) {
+    const menu = await getMenu();
+    const item = menu.find((produk) => produk.id === id);
+    if (!item) return;
+
     const keranjang = getKeranjang();
-    const menu = getMenu();
+    const qtySekarang = keranjang[id] || 0;
+    const qtyBaru = qtySekarang + perubahan;
+
+    if (qtyBaru < 0) return;
+
+    keranjang[id] = qtyBaru;
+    if (keranjang[id] === 0) {
+        delete keranjang[id];
+    }
+
+    saveKeranjang(keranjang);
+    await renderKeranjang();
+}
+
+async function bayarKeranjang() {
+    const keranjang = getKeranjang();
+    const menu = await getMenu();
     const items = [];
     let total = 0;
 
@@ -391,27 +491,28 @@ function bayarKeranjang() {
         return;
     }
 
-    const pesanan = getPesanan();
-    pesanan.unshift({
+    const order = {
         id: `order-${Date.now()}`,
         waktu: new Date().toLocaleString("id-ID"),
         meja: getMejaAktif(),
         status: "pending",
         total,
         items,
-    });
+        createdAt: Date.now(),
+    };
 
-    savePesanan(pesanan);
+    const pesanan = [order, ...(await getPesanan())];
+    await savePesanan(pesanan);
     saveKeranjang({});
-    renderKeranjang();
+    await renderKeranjang();
     alert("Pesanan berhasil dikirim ke kasir.");
 }
 
-function renderStatusPelanggan() {
+async function renderStatusPelanggan() {
     const statusContainer = document.getElementById("statusPesananPelanggan");
     if (!statusContainer) return;
 
-    const pesanan = getPesanan();
+    const pesanan = await getPesanan();
     if (pesanan.length === 0) {
         statusContainer.innerHTML = "";
         return;
@@ -426,8 +527,8 @@ function renderStatusPelanggan() {
     `;
 }
 
-function hitungLaporanPesanan() {
-    const pesanan = getPesanan();
+async function hitungLaporanPesanan() {
+    const pesanan = await getPesanan();
     const laporan = {
         totalPesanan: pesanan.length,
         pendapatanSelesai: 0,
@@ -455,11 +556,11 @@ function hitungLaporanPesanan() {
     return laporan;
 }
 
-function renderLaporan(targetId) {
+async function renderLaporan(targetId) {
     const container = document.getElementById(targetId);
     if (!container) return;
 
-    const laporan = hitungLaporanPesanan();
+    const laporan = await hitungLaporanPesanan();
     container.innerHTML = `
         <div class="report-grid">
             <div class="report-card">
@@ -484,16 +585,16 @@ function renderLaporan(targetId) {
     `;
 }
 
-function renderSemuaLaporan() {
-    renderLaporan("laporanAdmin");
-    renderLaporan("laporanKasir");
+async function renderSemuaLaporan() {
+    await renderLaporan("laporanAdmin");
+    await renderLaporan("laporanKasir");
 }
 
-function renderKasir() {
+async function renderKasir() {
     const container = document.getElementById("daftarPesanan");
     if (!container) return;
 
-    const pesanan = getPesanan();
+    const pesanan = await getPesanan();
     if (pesanan.length === 0) {
         container.innerHTML = "<p>Belum ada pesanan masuk.</p>";
         return;
@@ -528,22 +629,23 @@ function renderKasir() {
         .join("");
 }
 
-function updateStatus(id, statusBaru) {
-    const pesanan = getPesanan();
+async function updateStatus(id, statusBaru) {
+    const pesanan = await getPesanan();
     const target = pesanan.find((item) => item.id === id);
     if (!target) return;
 
     target.status = statusBaru;
-    savePesanan(pesanan);
-    renderKasir();
-    renderSemuaLaporan();
+    await savePesanan(pesanan);
+    await renderKasir();
+    await renderSemuaLaporan();
+    await renderStatusPelanggan();
 }
 
-function cetakStruk(id) {
+async function cetakStruk(id) {
     const printArea = document.getElementById("strukPrint");
     if (!printArea) return;
 
-    const pesanan = getPesanan();
+    const pesanan = await getPesanan();
     const target = pesanan.find((item) => item.id === id);
     if (!target) return;
 
@@ -590,25 +692,36 @@ function cetakStruk(id) {
     window.print();
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+window.ubahJumlah = ubahJumlah;
+window.bayarKeranjang = bayarKeranjang;
+window.generateQrMeja = generateQrMeja;
+window.printQrMeja = printQrMeja;
+window.hapusMenu = hapusMenu;
+window.updateStatus = updateStatus;
+window.cetakStruk = cetakStruk;
+
+document.addEventListener("DOMContentLoaded", async () => {
+    await initFirebaseData();
+
     if (document.getElementById("containerMenu")) {
         renderInfoMeja();
-        renderMenuIndex();
+        await renderMenuIndex();
     }
 
     if (document.getElementById("formMenu")) {
-        renderMenuAdmin();
+        await renderMenuAdmin();
         initPilihanGambar();
         initAdminForm();
     }
 
     if (document.getElementById("daftarPesanan")) {
-        renderKasir();
+        await renderKasir();
     }
 
-    renderSemuaLaporan();
+    await renderSemuaLaporan();
 
     if (document.getElementById("statusPesananPelanggan")) {
-        renderStatusPelanggan();
+        await renderStatusPelanggan();
     }
 });
+
