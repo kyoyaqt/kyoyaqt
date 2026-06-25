@@ -3,7 +3,6 @@ const MENU_COLLECTION = "menus";
 const ORDERS_COLLECTION = "orders";
 
 const gambarMenuTersedia = ["minus.png", "plus.png", "image.jpg"];
-
 const menuDefault = [
     { id: "nasi-goreng", nama: "Nasi Goreng", deskripsi: "Nasi goreng spesial.", harga: 20000 },
     { id: "sate-ayam", nama: "Sate Ayam", deskripsi: "Sate ayam dengan bumbu kacang.", harga: 25000 },
@@ -15,14 +14,12 @@ let unsubMenu = null;
 let unsubPesanan = null;
 
 function db() {
-    if (!window.firebaseDb) {
-        throw new Error("Firebase belum siap.");
-    }
+    if (!window.firebaseDb) throw new Error("Firebase belum siap.");
     return window.firebaseDb;
 }
 
 function formatRupiah(angka) {
-    return angka.toLocaleString("id-ID");
+    return Number(angka || 0).toLocaleString("id-ID");
 }
 
 function getStatusLabel(status) {
@@ -44,26 +41,24 @@ function getSumberGambar(item) {
 
 function getMejaAktif() {
     const params = new URLSearchParams(window.location.search);
-    const meja = params.get("meja");
-    if (meja) localStorage.setItem("mejaAktif", meja);
-    return meja || localStorage.getItem("mejaAktif") || "";
+    const mejaDariUrl = params.get("meja");
+    if (mejaDariUrl) localStorage.setItem("mejaAktif", mejaDariUrl);
+    return mejaDariUrl || localStorage.getItem("mejaAktif") || "";
 }
 
 function renderInfoMeja() {
-    const info = document.getElementById("infoMeja");
-    if (!info) return;
+    const infoMeja = document.getElementById("infoMeja");
+    if (!infoMeja) return;
     const meja = getMejaAktif();
-    info.textContent = meja ? `Meja: ${meja}` : "Meja belum dipilih dari QR.";
+    infoMeja.textContent = meja ? `Meja: ${meja}` : "Meja belum dipilih dari QR.";
 }
 
 function generateQrMeja() {
     const input = document.getElementById("namaMeja");
     const hasil = document.getElementById("hasilQrMeja");
     if (!input || !hasil) return;
-
     const namaMeja = input.value.trim();
     if (!namaMeja) return alert("Isi nama meja terlebih dahulu.");
-
     const urlPelanggan = new URL("index.html", window.location.href);
     urlPelanggan.searchParams.set("meja", namaMeja);
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(urlPelanggan.href)}`;
@@ -97,7 +92,7 @@ function startMenuListener() {
         renderMenuIndex();
         renderMenuAdmin();
         renderKeranjang();
-    });
+    }, (error) => console.error("Menu listener error:", error));
 }
 
 function startPesananListener() {
@@ -107,10 +102,15 @@ function startPesananListener() {
         renderKasir();
         renderSemuaLaporan();
         renderStatusPelanggan();
-    });
+    }, (error) => console.error("Pesanan listener error:", error));
 }
 
 async function initFirestore() {
+    if (!window.firebaseDb) {
+        alert("Firebase belum terhubung. Cek firebase.js dan file SDK.");
+        return;
+    }
+
     await ensureDefaultMenu();
     startMenuListener();
     startPesananListener();
@@ -128,12 +128,41 @@ function saveKeranjang(keranjang) {
     localStorage.setItem(KERANJANG_KEY, JSON.stringify(keranjang));
 }
 
+function initPilihanGambar() {
+    const select = document.getElementById("gambar");
+    const inputUrl = document.getElementById("gambarUrl");
+    if (!select) return;
+    gambarMenuTersedia.forEach((namaFile) => {
+        const option = document.createElement("option");
+        option.value = namaFile;
+        option.textContent = namaFile;
+        select.appendChild(option);
+    });
+    select.addEventListener("change", updatePreviewGambar);
+    inputUrl?.addEventListener("input", updatePreviewGambar);
+    updatePreviewGambar();
+}
+
+function updatePreviewGambar() {
+    const select = document.getElementById("gambar");
+    const inputUrl = document.getElementById("gambarUrl");
+    const preview = document.getElementById("previewGambar");
+    if (!select || !preview) return;
+    const gambar = inputUrl?.value.trim() || getPathGambar(select.value);
+    if (!gambar) {
+        preview.removeAttribute("src");
+        preview.style.display = "none";
+        return;
+    }
+    preview.src = gambar;
+    preview.style.display = "block";
+}
+
 function renderMenuIndex() {
     const container = document.getElementById("containerMenu");
     if (!container) return;
     const menu = getMenu();
     const keranjang = getKeranjang();
-
     container.innerHTML = menu.map((item) => {
         const qty = keranjang[item.id] || 0;
         const gambar = getSumberGambar(item);
@@ -173,36 +202,6 @@ function initAdminForm() {
         form.reset();
         updatePreviewGambar();
     });
-}
-
-function initPilihanGambar() {
-    const select = document.getElementById("gambar");
-    const inputUrl = document.getElementById("gambarUrl");
-    if (!select) return;
-    gambarMenuTersedia.forEach((namaFile) => {
-        const option = document.createElement("option");
-        option.value = namaFile;
-        option.textContent = namaFile;
-        select.appendChild(option);
-    });
-    select.addEventListener("change", updatePreviewGambar);
-    inputUrl?.addEventListener("input", updatePreviewGambar);
-    updatePreviewGambar();
-}
-
-function updatePreviewGambar() {
-    const select = document.getElementById("gambar");
-    const inputUrl = document.getElementById("gambarUrl");
-    const preview = document.getElementById("previewGambar");
-    if (!select || !preview) return;
-    const gambar = inputUrl?.value.trim() || getPathGambar(select.value);
-    if (!gambar) {
-        preview.removeAttribute("src");
-        preview.style.display = "none";
-        return;
-    }
-    preview.src = gambar;
-    preview.style.display = "block";
 }
 
 function renderKeranjang() {
@@ -259,17 +258,22 @@ async function bayarKeranjang() {
     });
     if (items.length === 0) return alert("Keranjang masih kosong.");
     if (!confirm("Yakin ingin membayar pesanan ini?")) return;
-    await db().collection(ORDERS_COLLECTION).add({
-        waktu: new Date().toLocaleString("id-ID"),
-        meja: getMejaAktif(),
-        status: "pending",
-        total,
-        items,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    saveKeranjang({});
-    renderKeranjang();
-    alert("Pesanan berhasil dikirim ke kasir.");
+    try {
+        await db().collection(ORDERS_COLLECTION).add({
+            waktu: new Date().toLocaleString("id-ID"),
+            meja: getMejaAktif(),
+            status: "pending",
+            total,
+            items,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+        saveKeranjang({});
+        renderKeranjang();
+        alert("Pesanan berhasil dikirim ke kasir.");
+    } catch (error) {
+        console.error("Gagal kirim pesanan:", error);
+        alert("Pesanan gagal dikirim.");
+    }
 }
 
 function renderStatusPelanggan() {
@@ -280,14 +284,25 @@ function renderStatusPelanggan() {
         return;
     }
     const pesananTerbaru = pesananCache[0];
-    statusContainer.innerHTML = `<h3>Status Pesanan</h3>${pesananTerbaru.meja ? `<p>Meja: <strong>${pesananTerbaru.meja}</strong></p>` : ""}<p>Pesanan terakhir: <strong>${getStatusLabel(pesananTerbaru.status)}</strong></p><p>Total: Rp ${formatRupiah(pesananTerbaru.total)}</p>`;
+    statusContainer.innerHTML = `
+        <h3>Status Pesanan</h3>
+        ${pesananTerbaru.meja ? `<p>Meja: <strong>${pesananTerbaru.meja}</strong></p>` : ""}
+        <p>Pesanan terakhir: <strong>${getStatusLabel(pesananTerbaru.status)}</strong></p>
+        <p>Total: Rp ${formatRupiah(pesananTerbaru.total)}</p>
+    `;
 }
 
 function hitungLaporanPesanan() {
-    const laporan = { totalPesanan: pesananCache.length, pendapatanSelesai: 0, pesananAktif: 0, status: { pending: 0, diproses: 0, pengantaran: 0, selesai: 0 } };
+    const laporan = {
+        totalPesanan: pesananCache.length,
+        pendapatanSelesai: 0,
+        pesananAktif: 0,
+        status: { pending: 0, diproses: 0, pengantaran: 0, selesai: 0 },
+    };
     pesananCache.forEach((item) => {
         if (laporan.status[item.status] !== undefined) laporan.status[item.status] += 1;
-        if (item.status === "selesai") laporan.pendapatanSelesai += item.total; else laporan.pesananAktif += 1;
+        if (item.status === "selesai") laporan.pendapatanSelesai += item.total || 0;
+        else laporan.pesananAktif += 1;
     });
     return laporan;
 }
@@ -296,7 +311,19 @@ function renderLaporan(targetId) {
     const container = document.getElementById(targetId);
     if (!container) return;
     const laporan = hitungLaporanPesanan();
-    container.innerHTML = `<div class="report-grid"><div class="report-card"><span>Total Pesanan</span><strong>${laporan.totalPesanan}</strong></div><div class="report-card"><span>Pendapatan Selesai</span><strong>Rp ${formatRupiah(laporan.pendapatanSelesai)}</strong></div><div class="report-card"><span>Pesanan Aktif</span><strong>${laporan.pesananAktif}</strong></div></div><div class="report-status"><p><span class="status-badge status-pending">Pending</span> ${laporan.status.pending} pesanan</p><p><span class="status-badge status-diproses">Di Proses</span> ${laporan.status.diproses} pesanan</p><p><span class="status-badge status-pengantaran">Dalam Pengantaran</span> ${laporan.status.pengantaran} pesanan</p><p><span class="status-badge status-selesai">Selesai</span> ${laporan.status.selesai} pesanan</p></div>`;
+    container.innerHTML = `
+        <div class="report-grid">
+            <div class="report-card"><span>Total Pesanan</span><strong>${laporan.totalPesanan}</strong></div>
+            <div class="report-card"><span>Pendapatan Selesai</span><strong>Rp ${formatRupiah(laporan.pendapatanSelesai)}</strong></div>
+            <div class="report-card"><span>Pesanan Aktif</span><strong>${laporan.pesananAktif}</strong></div>
+        </div>
+        <div class="report-status">
+            <p><span class="status-badge status-pending">Pending</span> ${laporan.status.pending} pesanan</p>
+            <p><span class="status-badge status-diproses">Di Proses</span> ${laporan.status.diproses} pesanan</p>
+            <p><span class="status-badge status-pengantaran">Dalam Pengantaran</span> ${laporan.status.pengantaran} pesanan</p>
+            <p><span class="status-badge status-selesai">Selesai</span> ${laporan.status.selesai} pesanan</p>
+        </div>
+    `;
 }
 
 function renderSemuaLaporan() {
@@ -311,11 +338,32 @@ function renderKasir() {
         container.innerHTML = "<p>Belum ada pesanan masuk.</p>";
         return;
     }
-    container.innerHTML = pesananCache.map((pesananItem, index) => `<div class="order-card"><h3>Pesanan ${index + 1}</h3><p><strong>Meja:</strong> ${pesananItem.meja || "-"}</p><p><strong>Waktu:</strong> ${pesananItem.waktu || "-"}</p><p><strong>Status:</strong> <span class="status-badge status-${pesananItem.status}">${getStatusLabel(pesananItem.status)}</span></p><ul>${(pesananItem.items || []).map((item) => `<li>${item.nama} x ${item.qty}</li>`).join("")}</ul><p><strong>Total:</strong> Rp ${formatRupiah(pesananItem.total || 0)}</p><div class="status-actions"><button onclick="updateStatus('${pesananItem.id}', 'pending')">Pending</button><button onclick="updateStatus('${pesananItem.id}', 'diproses')">Di Proses</button><button onclick="updateStatus('${pesananItem.id}', 'pengantaran')">Dalam Pengantaran</button><button onclick="updateStatus('${pesananItem.id}', 'selesai')">Selesai</button><button onclick="cetakStruk('${pesananItem.id}')">Cetak Struk</button></div></div>`).join("");
+    container.innerHTML = pesananCache.map((pesananItem, index) => `
+        <div class="order-card">
+            <h3>Pesanan ${index + 1}</h3>
+            <p><strong>Meja:</strong> ${pesananItem.meja || "-"}</p>
+            <p><strong>Waktu:</strong> ${pesananItem.waktu || "-"}</p>
+            <p><strong>Status:</strong> <span class="status-badge status-${pesananItem.status}">${getStatusLabel(pesananItem.status)}</span></p>
+            <ul>${(pesananItem.items || []).map((item) => `<li>${item.nama} x ${item.qty}</li>`).join("")}</ul>
+            <p><strong>Total:</strong> Rp ${formatRupiah(pesananItem.total || 0)}</p>
+            <div class="status-actions">
+                <button onclick="updateStatus('${pesananItem.id}', 'pending')">Pending</button>
+                <button onclick="updateStatus('${pesananItem.id}', 'diproses')">Di Proses</button>
+                <button onclick="updateStatus('${pesananItem.id}', 'pengantaran')">Dalam Pengantaran</button>
+                <button onclick="updateStatus('${pesananItem.id}', 'selesai')">Selesai</button>
+                <button onclick="cetakStruk('${pesananItem.id}')">Cetak Struk</button>
+            </div>
+        </div>
+    `).join("");
 }
 
 async function updateStatus(id, statusBaru) {
-    await db().collection(ORDERS_COLLECTION).doc(id).update({ status: statusBaru });
+    try {
+        await db().collection(ORDERS_COLLECTION).doc(id).update({ status: statusBaru });
+    } catch (error) {
+        console.error("Gagal update status:", error);
+        alert("Status gagal diperbarui.");
+    }
 }
 
 function cetakStruk(id) {
@@ -323,7 +371,38 @@ function cetakStruk(id) {
     if (!printArea) return;
     const target = pesananCache.find((item) => item.id === id);
     if (!target) return;
-    printArea.innerHTML = `<div class="receipt"><h2>Struk Pembayaran</h2><p>Restoran</p><hr><p><strong>No Pesanan:</strong> ${target.id}</p><p><strong>Meja:</strong> ${target.meja || "-"}</p><p><strong>Waktu:</strong> ${target.waktu || "-"}</p><p><strong>Status:</strong> ${getStatusLabel(target.status)}</p><hr><table><thead><tr><th>Menu</th><th>Qty</th><th>Harga</th><th>Subtotal</th></tr></thead><tbody>${(target.items || []).map((item) => `<tr><td>${item.nama}</td><td>${item.qty}</td><td>Rp ${formatRupiah(item.harga)}</td><td>Rp ${formatRupiah(item.harga * item.qty)}</td></tr>`).join("")}</tbody></table><hr><p class="receipt-total"><strong>Total: Rp ${formatRupiah(target.total || 0)}</strong></p><p class="receipt-footer">Terima kasih sudah memesan.</p></div>`;
+    printArea.innerHTML = `
+        <div class="receipt">
+            <h2>Struk Pembayaran</h2>
+            <p>Restoran</p>
+            <hr>
+            <p><strong>No Pesanan:</strong> ${target.id}</p>
+            <p><strong>Meja:</strong> ${target.meja || "-"}</p>
+            <p><strong>Waktu:</strong> ${target.waktu || "-"}</p>
+            <p><strong>Status:</strong> ${getStatusLabel(target.status)}</p>
+            <hr>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Menu</th><th>Qty</th><th>Harga</th><th>Subtotal</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${(target.items || []).map((item) => `
+                        <tr>
+                            <td>${item.nama}</td>
+                            <td>${item.qty}</td>
+                            <td>Rp ${formatRupiah(item.harga)}</td>
+                            <td>Rp ${formatRupiah(item.harga * item.qty)}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+            <hr>
+            <p class="receipt-total"><strong>Total: Rp ${formatRupiah(target.total || 0)}</strong></p>
+            <p class="receipt-footer">Terima kasih sudah memesan.</p>
+        </div>
+    `;
     window.print();
 }
 
@@ -349,4 +428,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (document.getElementById("daftarPesanan")) renderKasir();
     renderSemuaLaporan();
     if (document.getElementById("statusPesananPelanggan")) renderStatusPelanggan();
+});
+
+window.addEventListener("beforeunload", () => {
+    if (typeof unsubMenu === "function") unsubMenu();
+    if (typeof unsubPesanan === "function") unsubPesanan();
 });

@@ -7,5 +7,8 @@ window.FIREBASE_CONFIG = {
     appId: "1:964390632463:web:3a350c36c0ec915c8e777a",
 };
 
-firebase.initializeApp(window.FIREBASE_CONFIG);
-window.firebaseDb = firebase.firestore();
+if (typeof firebase !== "undefined" && !firebase.apps.length) {
+    firebase.initializeApp(window.FIREBASE_CONFIG);
+}
+
+window.firebaseDb = typeof firebase !== "undefined" ? firebase.firestore() : null;
