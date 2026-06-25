@@ -27,7 +27,9 @@ let detector;
 let previousHandCount = -1;
 let currentScale = 1;
 let currentImageIndex = 0;
-let wasHandClosed = false; // dipakai untuk deteksi ganti gambar saat tangan mengepal lalu membuka
+let wasHandClosed = false;
+
+// dipakai untuk deteksi ganti gambar saat tangan mengepal lalu membuka
 
 // ======================
 // LOG
