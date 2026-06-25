@@ -4,8 +4,22 @@ const ORDERS_COLLECTION = "orders";
 
 const gambarMenuTersedia = ["minus.png", "plus.png", "image.jpg"];
 const menuDefault = [
-    { id: "nasi-goreng", nama: "Nasi Goreng", deskripsi: "Nasi goreng spesial.", harga: 20000 },
-    { id: "sate-ayam", nama: "Sate Ayam", deskripsi: "Sate ayam dengan bumbu kacang.", harga: 25000 },
+    {
+        id: "nasi-goreng",
+        nama: "Nasi Goreng",
+        deskripsi: "Nasi goreng spesial.",
+        harga: 20000,
+        gambar: "",
+        gambarUrl: "",
+    },
+    {
+        id: "sate-ayam",
+        nama: "Sate Ayam",
+        deskripsi: "Sate ayam dengan bumbu kacang.",
+        harga: 25000,
+        gambar: "",
+        gambarUrl: "",
+    },
 ];
 
 let menuCache = [];
@@ -81,7 +95,9 @@ async function ensureDefaultMenu() {
     const snap = await db().collection(MENU_COLLECTION).get();
     if (!snap.empty) return;
     const batch = db().batch();
-    menuDefault.forEach((item) => batch.set(db().collection(MENU_COLLECTION).doc(item.id), item));
+    menuDefault.forEach((item) => {
+        batch.set(db().collection(MENU_COLLECTION).doc(item.id), item);
+    });
     await batch.commit();
 }
 
@@ -111,9 +127,14 @@ async function initFirestore() {
         return;
     }
 
-    await ensureDefaultMenu();
-    startMenuListener();
-    startPesananListener();
+    try {
+        await ensureDefaultMenu();
+        startMenuListener();
+        startPesananListener();
+    } catch (error) {
+        console.error("Gagal inisialisasi Firestore:", error);
+        alert("Firestore gagal dimulai. Cek rules dan koneksi Firebase.");
+    }
 }
 
 function getMenu() {
